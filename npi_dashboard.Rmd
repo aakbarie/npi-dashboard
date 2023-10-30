@@ -1,0 +1,125 @@
+---
+title: "Physician NPI Lookup"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(shiny)
+library(npi)
+library(DT)
+library(tidyverse)
+```
+
+Sidebar {.sidebar}
+---
+### File Upload
+Upload a CSV file containing physicians' first names, last names, and zip codes. The file should have columns named 'first_name', 'last_name', and 'zip_code'.
+
+```{r}
+radioButtons("searchType", "Search by:",
+             choices = list("Names and Zip Codes from File" = "file",
+                            "Zip Codes Only" = "zip"),
+             inline = TRUE)
+
+conditionalPanel(
+  condition = "input.searchType == 'file'",
+  fileInput("file1", "Choose CSV File",
+            accept = c("text/csv",
+                       "text/comma-separated-values,text/plain",
+                       ".csv")),
+  checkboxInput("header", "Header", TRUE)
+)
+
+conditionalPanel(
+  condition = "input.searchType == 'zip'",
+  textAreaInput("zipCodes", "Enter Zip Codes (comma separated):", "")
+)
+
+```
+
+Column {data-width=350}
+---
+### Uploaded CSV Contents
+View the contents of the uploaded CSV file.
+
+```{r}
+renderDT({
+  req(input$searchType)
+  if (input$searchType == "file") {
+    req(input$file1)
+    df <- read.csv(input$file1$datapath, header = input$header)
+  } else {
+    req(input$zipCodes)
+    zipCodes <- strsplit(input$zipCodes, ",")[[1]]
+    zipCodes <- trimws(zipCodes)
+    df <- data.frame(zip_code = zipCodes)
+  }
+  datatable(df)
+})
+
+```
+
+
+Column
+---
+
+### NPI Results
+The table below will display the uploaded data along with the corresponding NPIs for each physician.
+
+```{r}
+renderDT({
+  req(input$searchType)
+  results <- data.frame()
+  if (input$searchType == "file") {
+    req(input$file1)
+    df <- read.csv(input$file1$datapath, header = input$header)
+    if ("first_name" %in% colnames(df) && "last_name" %in% colnames(df) && "zip_code" %in% colnames(df)) {
+      results <- apply(df, 1, function(row) {
+        npi_res <- tryCatch({
+          npi_search(first_name = row["first_name"], last_name = row["last_name"], postal_code = row["zip_code"])
+        }, error = function(e) {
+          return(data.frame())
+        })
+        if (nrow(npi_res) > 0) {
+          npi_res$first_name <- row["first_name"]
+          npi_res$last_name <- row["last_name"]
+          npi_res$zip_code <- row["zip_code"]
+          return(npi_res)
+        } else {
+          return(data.frame(first_name = row["first_name"], last_name = row["last_name"], zip_code = row["zip_code"], number = NA))
+        }
+      }) %>% do.call(rbind, .)
+    } else {
+      stop("The uploaded file must contain 'first_name', 'last_name', and 'zip_code' columns.")
+    }
+  } else {
+    req(input$zipCodes)
+    zipCodes <- strsplit(input$zipCodes, ",")[[1]]
+    zipCodes <- trimws(zipCodes)
+    results <- lapply(zipCodes, function(zip) {
+      npi_res <- tryCatch({
+        npi_search(postal_code = zip)
+      }, error = function(e) {
+        return(data.frame())
+      })
+      if (nrow(npi_res) > 0) {
+        return(npi_res)
+      } else {
+        return(data.frame(zip_code = zip, npi = NA))
+      }
+    }) %>% 
+    do.call(rbind, .) %>% 
+    dplyr::select(npi) %>%
+    mutate(
+        Zip = input$zip
+    )
+  }
+  datatable(results)
+})
+
+```
