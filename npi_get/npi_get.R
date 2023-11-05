@@ -46,12 +46,70 @@ physicians <- npi_flatten(all_data_filtered) %>%
     address = addresses_address_1, city = addresses_city,
     state = addresses_state, zip_code = addresses_postal_code, 
     phone_number = addresses_telephone_number
-  ) %>%
-  left_join(
-    data_full %>% select(NPI, PlanName),
-    by = c("npi" = "NPI")
   )
 
-# Filter based on last update date, i.e., past 8 years
-filtered_physicians <- physicians %>% 
-  filter(last_update >= as.Date(Sys.Date() - 8*365))
+# Assuming your data frame is named df
+df_wide <- physicians %>%
+    filter(!is.na(last_name)) %>%
+    # Assign a rank with TRUE specialties first
+    mutate(Specialty_rank = if_else(True_Specialty, 1, 2)) %>%
+    # Arrange by npi, specialty rank, and last_update
+    arrange(npi, Specialty_rank, last_update) %>%
+    distinct(npi, last_name, Specialty, .keep_all = T) %>%
+    # Group by npi and specialty to ensure uniqueness
+    group_by(npi, Specialty) %>%
+    # Ensure that each specialty for an npi is unique
+    filter(row_number() == 1) %>%
+    ungroup() %>%
+    # Group by npi to create a sequence for each specialty
+    group_by(npi) %>%
+    # Create a new sequence number for each specialty within each npi
+    mutate(Specialty_seq = row_number()) %>%
+    ungroup() %>%
+    # Spread the specialties into separate columns
+    pivot_wider(
+        id_cols = c(npi, credential, first_name, last_name, gender, last_update, taxonomies_license),
+        names_from = Specialty_seq,
+        names_prefix = "Specialty",
+        values_from = Specialty
+    ) %>%
+    # Remove duplicate npi rows, keeping the first occurrence
+    distinct(npi, .keep_all = TRUE) %>%
+    # Reshape to long, remove NAs, and pivot wider again to close gaps
+    pivot_longer(
+        cols = starts_with("Specialty"),
+        names_to = "Specialty_key",
+        values_to = "Specialty_value",
+        values_drop_na = TRUE
+    ) %>%
+    group_by(npi) %>%
+    mutate(Specialty_seq = row_number()) %>%
+    pivot_wider(
+        id_cols = c(npi, credential, first_name, last_name, gender, last_update, taxonomies_license),
+        names_from = Specialty_seq,
+        names_prefix = "Specialty",
+        values_from = Specialty_value
+    ) %>%
+    ungroup() %>%
+    rename(
+        True_Specialty = Specialty1
+    ) 
+
+final_data <- 
+    physicians %>% 
+    # removing organizations
+    filter(!is.na(last_name)) %>%
+    # Assign a rank with TRUE specialties first
+    mutate(
+        zip_code = substr(zip_code, 1, 5),
+        Specialty_rank = if_else(True_Specialty, 1, 2)
+    ) %>%
+    # Arrange by npi, specialty rank, and last_update
+    arrange(npi, Specialty_rank, last_update) %>%
+    select(-c(True_Specialty, Specialty)) %>% 
+    distinct(npi, .keep_all = T) %>%
+    left_join(
+        df_wide
+    )
+
+# add county grab
